@@ -1,0 +1,55 @@
+reg[1] = 8725355
+reg[1] *= 65899 -> 574992169145
+reg[1] = reg[1] & (0b111111111111111111111111) -> 3422393
+
+----------
+
+reg[2] contains number of iterations needed to get out of the chunk loop (this time, 256)
+reg[5] = reg[2] & 255  (cuts off anything above 8 bits) -> 0
+reg[1] += reg[5] -> 3422393
+reg[1] = reg[1] & (0b111111111111111111111111) -> 3422393   ** shows that reg[1] can never be more than 24 bits
+
+----------
+
+reg[2] contains number of iterations needed to get out of the chunk loop (this time, 1)
+reg[5] = reg[2] & 255 -> 1
+reg[1] += reg[5] -> 12938836
+reg[1] = reg[1] & (0b111111111111111111111111) -> 12938836
+...
+reg[5] = (reg[1] == reg[0]) ? 1 : 0 -> 0 (by design; we want to see how much further we can go)
+
+============================
+
+The instruction that matters most here is what happens when 
+    reg[1] = reg[1] & (0b111111111111111111111111)
+because anything above those 24 bits in reg[1] will be irrelevant.
+
+Over time, reg[1] is:
+- multiplied by 65899
+- capped at 24 bits
+- has the number of iterations to get out of the chunk loops, capped to 8 bits, added to it
+- capped again at 24 bits
+
+------------------
+
+Values of reg[1] over time (in the chunks that loop)...
+  3422393
+  12938835
+  5267565
+  ...?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
