@@ -1,3 +1,5 @@
+require 'set'
+
 class Valve
     attr_accessor :name, :flow_rate, :neighbours
 
@@ -8,7 +10,7 @@ class Valve
     end
 end
 
-class ValveSystem  
+class ValveSystem
     def initialize
         @valves = Hash.new
         
@@ -27,31 +29,101 @@ class ValveSystem
     end
 
     def find_max_pressure
-        initial_state = HillClimbState.new(self, [], @valves["AA"], :start, 0, 0, nil)
-        (1..1000000).map { hill_climb_max_pressure(initial_state, 30)}.max
+        all_non_zero_valves = Set.new(@valves.values.filter{|v| v.flow_rate > 0})
+
+        initial_state = SearchSpaceState.new(
+            compute_all_pairs_shortest_paths,
+            all_non_zero_valves, Set.new, @valves["AA"],
+            0, 0,
+            30,
+            nil)
+
+        max_pressure_state = search_space_find_max_pressure(initial_state)
+
+        # state_to_print = max_pressure_state
+        # loop do
+        #     puts "#{state_to_print}"
+        #     state_to_print = state_to_print.parent_state
+        #     break if state_to_print == nil
+        # end
+
+        max_pressure_state.total_pressure_released
+    end
+
+    def compute_all_pairs_shortest_paths        
+        shortest_path_distances = Hash.new(99999)
+
+        @valves.values.each do |valve|
+            shortest_path_distances[[valve.name, valve.name]] = 0
+            valve.neighbours.each do |neighbour_value_name|
+                shortest_path_distances[[valve.name, neighbour_value_name]] = 1
+                shortest_path_distances[[neighbour_value_name, valve.name]] = 1
+            end
+        end
+
+        @valves.values.each do |k_valve|
+            @valves.values.each do |i_valve|
+                @valves.values.each do |j_valve|
+
+                    if (shortest_path_distances[[i_valve.name, j_valve.name]] >
+                            shortest_path_distances[[i_valve.name, k_valve.name]] +
+                            shortest_path_distances[[k_valve.name, j_valve.name]])
+
+                        shortest_path_distances[[i_valve.name, j_valve.name]] =
+                            shortest_path_distances[[i_valve.name, k_valve.name]] +
+                            shortest_path_distances[[k_valve.name, j_valve.name]]
+
+                    end
+                end
+            end
+        end
+
+        shortest_path_distances
+    end
+
+    def nonzero_valve_neighbours_with_distance(from_valve_name)
+        compute_all_pairs_shortest_paths if shortest_path_distances == nil
+        result = Array.new
+        shortest_path_distances.each_pair do |edge, dist|
+            if edge[0] == from_valve_name && @valves[edge[1]].flow_rate > 0
+                result.push([edge[1], dist])
+            end
+        end
+        result
     end
 
     private
 
-    class HillClimbState
-        attr_reader :total_pressure_released, :valve, :parent_state
+    class SearchSpaceState
+        attr_reader :curr_flow_rate, :curr_valve, :parent_state
+        attr_accessor :total_pressure_released, :steps_remaining
 
-        def initialize(valve_system, opened_valves, valve, action, curr_flow_rate, total_pressure_released, parent_state)
-            @valve_system = valve_system
+        def initialize(shortest_path_distances,
+                       unopened_valves, opened_valves, curr_valve,
+                       curr_flow_rate, total_pressure_released,
+                       steps_remaining,
+                       parent_state)
+            
+            @shortest_path_distances = shortest_path_distances
+            @unopened_valves = unopened_valves
             @opened_valves = opened_valves
-            @valve = valve
-            @action = action
+            @curr_valve = curr_valve
             @curr_flow_rate = curr_flow_rate
             @total_pressure_released = total_pressure_released
+            @steps_remaining = steps_remaining
             @parent_state = parent_state
         end
 
         def to_s
-            "Valve=#{@valve.name}, action=#{@action}, curr_flow_rate=#{@curr_flow_rate}, total_pressure_released=#{@total_pressure_released}"
+            "Valve=#{@curr_valve.name}, curr_flow_rate=#{@curr_flow_rate}, total_pressure_released=#{@total_pressure_released}, steps_remaining=#{@steps_remaining}"
         end
 
         def num_opened_valves
             @opened_valves.count
+        end
+
+        def num_unopened_valves
+            @unopened_valves.count
         end
 
         def was_valve_opened?(valve_name)
@@ -61,49 +133,21 @@ class ValveSystem
         def successors
             successors = []
 
-            # if we've already opened all the valves, we should just sit at the current location
-            if @valve_system.num_openable_valves == num_opened_valves
-                return [HillClimbState.new(
-                    @valve_system, 
-                    @opened_valves, 
-                    @valve, 
-                    :stay, 
-                    @curr_flow_rate,
-                    @total_pressure_released + @curr_flow_rate,
-                    self
-                )]
-            end
-
-            ###
-
-            # one successor action is simply opening the valve at the current location
-            # if it's non-zero and not already open
-            if !was_valve_opened?(@valve.name) && @valve.flow_rate > 0
-                successors.push(HillClimbState.new(
-                    @valve_system,
-                    @opened_valves + [@valve.name],
-                    @valve,
-                    :open_valve,
-                    @curr_flow_rate + @valve.flow_rate,
-                    @total_pressure_released + @curr_flow_rate,
+            @unopened_valves.each do |unopened_valve|
+                distance_to_unopened_valve = @shortest_path_distances[[@curr_valve.name, unopened_valve.name]]
+                successors.push(SearchSpaceState.new(
+                    @shortest_path_distances,
+                    Set.new(@unopened_valves.to_a - [unopened_valve]),
+                    @opened_valves | Set.new([unopened_valve]),
+                    unopened_valve,
+                    curr_flow_rate + unopened_valve.flow_rate,
+                    total_pressure_released + (curr_flow_rate*(distance_to_unopened_valve+1)),
+                    steps_remaining - (1 + distance_to_unopened_valve),
                     self
                 ))
             end
 
-            # the other successor actions are moving to the neighbouring valves
-            valve.neighbours.each do |neighbour_value_name|
-                successors.push(HillClimbState.new(
-                    @valve_system,
-                    @opened_valves,
-                    @valve_system[neighbour_value_name],
-                    :move_location,
-                    @curr_flow_rate,
-                    @total_pressure_released + @curr_flow_rate,
-                    self
-                ))
-            end
-
-            # puts "Successors of #{@valve.name}:"
+            # puts "Successors of #{@curr_valve.name}:"
             # successors.each {|s| p s.to_s}
             # puts
 
@@ -111,32 +155,29 @@ class ValveSystem
         end
     end
 
-    def hill_climb_max_pressure(curr_state, num_steps_left)
-        if num_steps_left == 0
-            # if curr_state.num_opened_valves >= 6
-                # puts
-                # state_to_print = curr_state
-                # loop do
-                #     break if state_to_print == nil
-                #     puts state_to_print.to_s
-                #     state_to_print = state_to_print.parent_state
-                # end
-            # end
-            return curr_state.total_pressure_released 
+    def search_space_find_max_pressure(curr_state)
+        if curr_state.num_unopened_valves == 0
+            # after all valves are opened, we just have to tick time away for the last pressure to release
+            while curr_state.steps_remaining > 0 do 
+                curr_state.total_pressure_released += curr_state.curr_flow_rate
+                curr_state.steps_remaining -= 1
+            end
+            return curr_state
+        else
+            # otherwise, test out going to all the other open valves and get the max
+            max_pressure_so_far = 0
+            max_pressure_state = nil
+
+            curr_state.successors.each do |successor|
+                max_pressure_sucessor = search_space_find_max_pressure(successor)
+                if max_pressure_so_far < max_pressure_sucessor.total_pressure_released
+                    max_pressure_so_far = max_pressure_sucessor.total_pressure_released
+                    max_pressure_state = max_pressure_sucessor
+                end
+            end
+
+            return max_pressure_state
         end
-
-        max_pressure_so_far = 0
-        successors = curr_state.successors
-
-        # successors.each do |successor|
-        #     new_pressure = hill_climb_max_pressure(successor, num_steps_left-1)
-        #     max_pressure_so_far = [max_pressure_so_far, new_pressure].max
-        # end
-
-        new_pressure = hill_climb_max_pressure(successors.sample, num_steps_left-1)
-        max_pressure_so_far = [max_pressure_so_far, new_pressure].max
-
-        return max_pressure_so_far
     end
 end
 
@@ -150,4 +191,7 @@ def process_file(filename)
 end
 
 valve_system_test = process_file("day16-input-test.txt")
-p valve_system_test.find_max_pressure
+puts "Max pressure (test): #{valve_system_test.find_max_pressure}"
+
+valve_system_real = process_file("day16-input.txt")
+puts "Max pressure (real): #{valve_system_real.find_max_pressure}"
